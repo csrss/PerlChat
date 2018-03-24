@@ -1,0 +1,762 @@
+#!/usr/bin/perl
+my $pass = "1"; 
+my $server_host = "127.0.0.1"; 
+my $SEND_PORT = 1111; 
+my $ERTEPort = 666; 
+my $J = ":"; # splitter
+
+package Gtk2::Helper;
+use Glib;
+use DBI;
+use IO::Socket;
+
+sub add_watch {shift; my ($fd, $cond, $callback, $data) = @_;
+$cond = $cond eq 'in'  ? 'G_IO_IN'  : $cond eq 'out' ? 'G_IO_OUT' :
+print "Invalid condition flag. Expecting: 'in' / 'out'";
+my $tag = { io_id  => Glib::IO->add_watch ($fd, $cond, $callback, $data),
+hup_id => Glib::IO->add_watch ($fd, 'G_IO_HUP', $callback, $data),};
+return $tag;
+}
+
+use Gtk2 -init;
+my %Retkey = ('Return' => 0xff0d);
+sub rot47 {my ($str)=@_;$str =~ tr/!-~/P-~!-O/;return $str;}
+
+my $MAX_CHUNK_SIZE;
+$MAX_CHUNK_SIZE = 1024 unless $MAX_CHUNK_SIZE;
+sub new {my ( $class, $key )  = @_;my $self = bless {}, $class;$self->{state} = Setup( $key );
+$self->{x} = 0;$self->{y} = 0;$self;}
+sub RC4 {my $self;my( @state, $x, $y );if ( ref $_[0] ) {$self = shift;@state = @{ $self->{state} };
+$x = $self->{x};$y = $self->{y};} else {@state = Setup( shift );$x = $y = 0;}
+my $message = shift;my $num_pieces = do {my $num = length($message) / $MAX_CHUNK_SIZE;
+my $int = int $num;$int == $num ? $int : $int+1;};for my $piece ( 0..$num_pieces - 1 ) {
+my @message = unpack "C*", substr($message, $piece * $MAX_CHUNK_SIZE, $MAX_CHUNK_SIZE);
+for ( @message ) {$x = 0 if ++$x > 255;$y -= 256 if ($y += $state[$x]) > 255;
+@state[$x, $y] = @state[$y, $x]; $_ ^= $state[( $state[$x] + $state[$y] ) % 256];}
+substr($message, $piece * $MAX_CHUNK_SIZE, $MAX_CHUNK_SIZE) = pack "C*", @message;}
+if ($self) {$self->{state} = \@state; $self->{x} = $x;$self->{y} = $y;}$message;}
+sub Setup { my @k = unpack( 'C*', shift );my @state = 0..255;my $y = 0;for my $x (0..255) {
+$y = ( $k[$x % @k] + $state[$x] + $y ) % 256;@state[$x, $y] = @state[$y, $x];}wantarray ? @state : \@state;}
+
+BEGIN { push @INC,'.'; } 
+my $me = getlogin;
+
+sub decry ($){ local($^W) = 0;my $str = shift;my $res = "";
+$str =~ tr|A-Za-z0-9+=/||cd;$str =~ s/=+$//;  $str =~ tr|A-Za-z0-9+/| -_|;  
+while ($str =~ /(.{1,60})/gs) {my $len = chr(32 + length($1)*3/4); 
+$res .= unpack("u", $len . $1 ); }$res;}
+
+sub cry ($;$){ my $res = ""; my $eol = $_[1]; $eol = "\n" unless defined $eol;
+pos($_[0]) = 0; while ($_[0] =~ /(.{1,45})/gs) {$res .= substr(pack('u', $1), 1);chop($res);}
+$res =~ tr|` -_|AA-Za-z0-9+/|;  my $padding = (3 - length($_[0]) % 3) % 3;
+$res =~ s/.{$padding}$/'=' x $padding/e if $padding;if (length $eol) {
+$res =~ s/(.{1,76})/$1$eol/g;} $res;}
+
+my $combobox; my $mainview; my $mainview2; 
+my $mainview3; my $mainview4; my $mainview5; my $mainview6; my $main_stat_frame3;
+my $main_stat_frame4; 
+my $tview3 = Gtk2::TextView->new();
+my $buffEx = $tview3->get_buffer();
+my $msg_send2; my $quadcmd; my $tmachines;
+my $main_stat_frame_after_next4;
+my $total_machines = Gtk2::Label->new(); my $total_machines2 = Gtk2::Label->new();
+my $total_machines3 = Gtk2::Label->new(); my $total_machines4 = Gtk2::Label->new();
+my $NewSw; my $NewTView = Gtk2::TextView->new(); my $NewSw2;
+my $ent_send = Gtk2::Entry->new; my $UltimateBuffEx = $NewTView->get_buffer();
+my $MainEntry = Gtk2::Entry->new(); my $NewBuffor = $NewTView->get_buffer();
+my $UserWindowSW; my $UserWindowTView = Gtk2::TextView->new(); my $PrivateEntry = Gtk2::Entry->new();
+my $buff = $UserWindowTView->get_buffer(); my $NewTView2 = Gtk2::TextView->new(); my $NewBuffor2 = $NewTView2->get_buffer();
+my $number_of_users; my $users_container; my $xaxa; my $tag_send; my $RC4Value;
+my $dbhost = "localhost"; my $dbuser = "root"; my $dbpass = ""; my $db = "users"; my $table = "stats";
+ 
+$buffEx->insert ($buffEx->get_end_iter, "P.I.C. Management System started! \n");
+
+my $tree_store = Gtk2::TreeStore->new(qw/Glib::String/);
+my $tree_view = Gtk2::TreeView->new($tree_store);
+my $tree_column = Gtk2::TreeViewColumn->new();
+
+my  $MAXLEN = 1024;
+my $proto = 'udp';
+my  	$tag_receive 	= 'mrZ';
+$|=1;
+
+my $sock = IO::Socket::INET->new(LocalPort => $ERTEPort, Proto => $proto) or $buffEx->insert ($buffEx->get_end_iter, "Socket Error: $@ ");
+Gtk2::Helper->add_watch ( fileno $sock, 'in',sub{ my ($fd,$condition,$fh) = @_;\&watch_callback($fh,$NewTView);},$sock);
+
+Gtk2::Rc->parse ('/usr/share/themes/Qt/gtk-2.0/gtkrc');
+$buffEx->insert ($buffEx->get_end_iter, "Listenning on port $ERTEPort and $REG_PORT  for processing connections with server. \n");
+
+
+my $window = Gtk2::Window->new('toplevel');
+$window->set_resizable(1);
+$window->set_icon_from_file ("globe.png");
+$window->set_position('center_always');
+$window->signal_connect('delete_event' => sub {
+my $send_sock = IO::Socket::INET->new(Proto => $proto,PeerPort  => $SEND_PORT,
+PeerAddr  => $server_host)or $buffEx->insert ($buffEx->get_end_iter, "Creating socket: \n$!\n");
+my $encoded0 = rot47("log_of$J$tag_send");
+my $encRC4 = RC4( $pass, $encoded0 );
+$send_sock->send($encRC4) or $buffEx->insert ($buffEx->get_end_iter, "send: $!\n"); 
+exit;});
+
+
+  $window->set_border_width(5);
+  $window->set_title(" P.I.C Chat System ");
+  my ($vbox) = &ret_vbox();
+  $window->add($vbox);
+  $window->show();
+
+open(F2,"/etc/.P.I.C_DATA.txt") || $buffEx->insert ($buffEx->get_end_iter, "No data! Have you registered?\n"); 
+my $details = decry(<F2>);
+@login_pass = split(/$J/, $details);
+$rootlogin = $login_pass[0]; $rootpasswd = $login_pass[1];
+$tag_send = $login_pass[0];
+my $msg_send = "auth$J".$rootlogin."$J".$rootpasswd."$J"."0";
+my $send_sock = IO::Socket::INET->new(Proto => $proto,PeerPort  => $SEND_PORT,
+PeerAddr  => $server_host)or $buffEx->insert ($buffEx->get_end_iter, "Creating socket: \n$!\n");
+my $encoded0 = rot47("$msg_send");
+my $encRC4 = RC4( $pass, $encoded0 );
+$send_sock->send($encRC4) or $buffEx->insert ($buffEx->get_end_iter, "send: $!\n"); 
+
+Gtk2->main();
+
+sub MainBox { my $vbox = Gtk2::VBox->new(0,0);
+
+my $mainbox = Gtk2::HBox->new(0,0);
+my $btn_quit = Gtk2::Button->new_from_stock('gtk-quit');
+$btn_quit->signal_connect("clicked" =>sub {
+my $send_sock = IO::Socket::INET->new(Proto => $proto,PeerPort  => $SEND_PORT,
+PeerAddr  => $server_host)or $buffEx->insert ($buffEx->get_end_iter, "Creating socket: \n$!\n");
+my $encoded0 = rot47("log_of$Jme");
+my $encRC4 = RC4( $pass, $encoded0 );
+$send_sock->send($encRC4) or $buffEx->insert ($buffEx->get_end_iter, "send: $!\n"); 
+exit;
+});
+
+my $btn_quick_reg = Gtk2::Button->new_from_stock('Register');
+$btn_quick_reg->signal_connect("clicked" =>sub {
+$msg_send = $MainEntry->get_text;
+my @check = split(/$J/, $msg_send);
+if(length($check[0]) < 3){goto WrongName;}
+if(length($check[1]) < 3){goto WrongPass;}
+$MainEntry->set_text("");
+$MainEntry->grab_focus;
+my $msg_send_all = "reg$J".$msg_send;
+if ($msg_send_all !~ m/^\s*$/){
+my $sock_reg = IO::Socket::INET->new(Proto => $proto,PeerPort  => $SEND_PORT, PeerAddr  => $server_host)or $buffEx->insert ($buffEx->get_end_iter, "Creating socket: \n$!\n");
+my $encoded0 = rot47("$msg_send_all"); my $encRC4 = RC4( $pass, $encoded0 );
+$sock_reg->send($encRC4) or $buffEx->insert ($buffEx->get_end_iter, "send: $!");
+}
+WrongName:
+$buffEx->insert ($buffEx->get_end_iter, "UserName too small! Minimum length is 3 characters!\n");
+WrongPass:
+$buffEx->insert ($buffEx->get_end_iter, "Password too small! Minimum length is 3 characters!\n");
+}); 
+
+my $btn_quick_login = Gtk2::Button->new_from_stock('Login');
+$btn_quick_login->signal_connect("clicked" =>sub {
+$msg_send = $MainEntry->get_text;
+my @check = split(/$J/, $msg_send);
+if(length($check[0]) < 3){goto WrongName;}
+if(length($check[1]) < 3){goto WrongPass;}
+$MainEntry->set_text("");
+$MainEntry->grab_focus;
+my $msg_send_all = "auth$J".$msg_send;
+if ($msg_send_all !~ m/^\s*$/){
+my $sock_reg = IO::Socket::INET->new(Proto => $proto,PeerPort  => $SEND_PORT, PeerAddr  => $server_host)or $buffEx->insert ($buffEx->get_end_iter, "Creating socket: \n$!\n");
+my $encoded0 = rot47("$msg_send_all"); my $encRC4 = RC4( $pass, $encoded0 );
+$sock_reg->send($encRC4) or $buffEx->insert ($buffEx->get_end_iter, "send: $!");
+}
+WrongName:
+$buffEx->insert ($buffEx->get_end_iter, "UserName too small! Minimum length is 3 characters!\n");
+WrongPass:
+$buffEx->insert ($buffEx->get_end_iter, "Password too small! Minimum length is 3 characters!\n");
+});
+
+my $btn_quick_ref_priv = Gtk2::Button->new_from_stock("Clear Private\nChat Window");
+$btn_quick_ref_priv->signal_connect("clicked" =>sub {
+my $clearbuffer = $NewTView2->get_buffer;
+$clearbuffer->delete($clearbuffer->get_start_iter, $clearbuffer->get_end_iter);
+$NewTView2->set_buffer($clearbuffer);
+});
+
+my $btn_quick_ref_pub = Gtk2::Button->new_from_stock("Clear Public\nChat Window");
+$btn_quick_ref_pub->signal_connect("clicked" =>sub {
+my $clearbuffer = $NewTView->get_buffer;
+$clearbuffer->delete($clearbuffer->get_start_iter, $clearbuffer->get_end_iter);
+$NewTView->set_buffer($clearbuffer);
+});
+
+my $frame2 = Gtk2::Frame->new("Private Chat Window");
+$frame2->set_border_width(5);
+$NewSw2 = Gtk2::ScrolledWindow->new (undef, undef);
+$NewSw2->set_shadow_type ('etched-out');
+$NewSw2->set_policy ('automatic', 'automatic');
+$NewSw2->set_size_request (600, 300);
+$NewSw2->set_border_width(5);
+
+$NewTView2->set_editable(0);
+$NewTView2->set_cursor_visible (0);
+
+$NewBuffor2->create_mark ('end', $NewBuffor2->get_end_iter, 0);
+$NewBuffor2->signal_connect (insert_text => sub {
+$NewTView2->scroll_to_mark ($NewBuffor2->get_mark ('end'), 0.0, 1, 0, 0.5);});
+$NewBuffor2->create_tag ("mrX",foreground => "red",);	
+$NewBuffor2->create_tag ("mrZ",foreground => "blue",);
+
+my $frame = Gtk2::Frame->new("Public Chat Window");
+$frame->set_border_width(5);
+$NewSw = Gtk2::ScrolledWindow->new (undef, undef);
+$NewSw->set_shadow_type ('etched-out');
+$NewSw->set_policy ('automatic', 'automatic');
+$NewSw->set_size_request (600, 300);
+$NewSw->set_border_width(5);
+
+$NewTView->set_editable(0);
+$NewTView->set_cursor_visible (0);
+
+$NewBuffor->create_mark ('end', $NewBuffor->get_end_iter, 0);
+$NewBuffor->signal_connect (insert_text => sub {
+$NewTView->scroll_to_mark ($NewBuffor->get_mark ('end'), 0.0, 1, 0, 0.5);});
+$NewBuffor->create_tag ("mrX",foreground => "red",);	
+$NewBuffor->create_tag ("mrZ",foreground => "blue",);
+
+my $swind = Gtk2::ScrolledWindow->new (undef, undef);
+$swind->set_shadow_type ('etched-out');
+$swind->set_policy ('automatic', 'automatic');
+$swind->set_size_request (200, 100);
+$swind->set_border_width(5);
+
+$tree_column->set_title ("Select User to Talk");
+my $renderer = Gtk2::CellRendererText->new;
+$tree_column->pack_start ($renderer, 0);
+$tree_column->add_attribute($renderer, text => 0);
+$tree_view->append_column ($tree_column);
+my $treeselection = $tree_view->get_selection;
+my $iter_child; my $iter;
+
+my $btn_show_users = Gtk2::Button->new("_Update\nUser List!");
+$btn_show_users->signal_connect("clicked" => sub {
+my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $server_host) ;
+my $encoded0 = rot47("uSe_RliST".$J."iwANt");
+my $encRC4 = RC4( $pass, $encoded0 );
+$sock3->send("$encRC4");
+
+$tree_store->clear ();
+$iter = $tree_store->append(undef);
+$tree_store->set ($iter,0 => "Users");
+
+my $int; my @usersTotal =  split(/$J/, $xaxa);
+foreach (1..$number_of_users){
+my $ex .=  $usersTotal[$int++];
+$iter_child = $tree_store->append($iter);
+if(index($ex, "oN4nDrUnn1N") > 0){
+my $on = substr($ex, 0, -11);
+$tree_store->set ($iter_child,0 =>$on." [+]");}
+elsif(index($ex, "0fF_L1nE") > 0){
+my $off = substr($ex, 0, -8);
+$tree_store->set ($iter_child,0 =>$off." [-]"); }
+}});
+
+my $fram = Gtk2::Frame->new(); my $HBBox = Gtk2::VBox->new(0,0);
+my $someBox = Gtk2::VBox->new(); $someBox->add($btn_show_users);
+$someBox->add($btn_quick_reg); $someBox->add($btn_quick_login); 
+$someBox->add($btn_quick_ref_priv); $someBox->add($btn_quick_ref_pub); 
+$NewSw->add($NewTView);$frame->add($NewSw); $swind->add($tree_view); $fram->add($swind);
+$NewSw2->add($NewTView2); $frame2->add($NewSw2); 
+$HBBox->add($frame); $HBBox->add($frame2);
+
+$mainbox->pack_start($HBBox,1,1,4);
+$mainbox->pack_start($fram,1,1,4);
+$mainbox->add($someBox);
+$vbox->pack_start($mainbox,1,1,4);
+my $hbox = Gtk2::HBox->new(0,5);
+$vbox->set_focus_child($hbox);$vbox->show_all();
+return $vbox;
+}
+
+sub ret_vbox {
+
+my $vbox = Gtk2::VBox->new(0,0); 
+my $frame = Gtk2::Frame->new("$tag_send");
+$frame->set_border_width(5);
+
+  	my $menu_edit = Gtk2::Menu->new();
+  	$menu_edit->append(Gtk2::TearoffMenuItem->new);
+  		my $menu_item_cut = Gtk2::ImageMenuItem->new_from_stock ('gtk-about', undef);
+  		$menu_item_cut->signal_connect('activate' => sub { &About(); });
+  		$menu_edit->append($menu_item_cut);
+  		$menu_edit->append(Gtk2::SeparatorMenuItem->new());
+  		my $menu_item_image = Gtk2::ImageMenuItem->new_from_stock ('gtk-quit', undef);
+  		$menu_item_image->signal_connect('activate' => sub {
+		my $send_sock = IO::Socket::INET->new(Proto => $proto,PeerPort  => $SEND_PORT,
+		PeerAddr  => $server_host)or $buffEx->insert ($buffEx->get_end_iter, "Creating socket: \n$!\n");
+		my $encoded0 = rot47("log_of$J$tag_send");
+		my $encRC4 = RC4( $pass, $encoded0 );
+		$send_sock->send($encRC4) or $buffEx->insert ($buffEx->get_end_iter, "send: $!\n"); 
+		exit;
+		});
+  		$menu_edit->append($menu_item_image);
+ 		my $menu_bar = Gtk2::MenuBar->new;
+  		my $menu_item_edit= Gtk2::MenuItem->new('_File');
+  		$menu_item_edit->set_submenu ($menu_edit);
+  		$menu_bar->append($menu_item_edit);
+
+my $menu_h = Gtk2::Menu->new();
+$menu_h->append(Gtk2::TearoffMenuItem->new);
+
+my $menu_item_h3 = Gtk2::ImageMenuItem->new_from_stock ("Logs Help");
+$menu_item_h3->signal_connect('activate' => sub { 
+&MessageBox("\n If some errors will appear, they will be shown in 
+ logs console. Also, every event will be logged here, every 
+ message from server and such so it is good to check often 
+ this TAB.\n", " Logs Help ");
+});
+
+my $menu_item_h4 = Gtk2::ImageMenuItem->new_from_stock ("P.I.C. System Map Help");
+$menu_item_h4->signal_connect('activate' => sub { 
+&MessageBox("\n Here you can see how your chat statistics
+ looks like. To update stats, hit bottom-left button, 
+ to delete banned users, hit bottom-right button.
+ After deletion of banned users, you have to update 
+ statistics to see the effect.\n", " P.I.C. System Map Help ");
+});
+
+my $menu_item_h5 = Gtk2::ImageMenuItem->new_from_stock ("Chat Window Help");
+$menu_item_h5->signal_connect('activate' => sub { 
+&MessageBox("\n Thats the same chat window like user-side 
+ application has. You can see here user list, talk with users 
+ and so on.\n", "Chat Window Help ");
+});
+
+my $menu_item_h6 = Gtk2::ImageMenuItem->new_from_stock ("P.C.C. Help");
+$menu_item_h6->signal_connect('activate' => sub { 
+&MessageBox("\n Here you are administrating your chat server. 
+ On the bottom you have small stats, just quick overview 
+ of what you got so far ;) If you want to transmit some 
+ command to your chat server, select one of the available 
+ then type your arguments in apropriate fields and hit 
+ 'Transmit command' button. This will send your encrypted 
+ command to the server, which will execute it and send back 
+ results. \n", " P.C.C. Help ");
+});
+
+$menu_h->append($menu_item_h3);
+$menu_h->append($menu_item_h4);
+$menu_h->append($menu_item_h5);
+$menu_h->append($menu_item_h6);
+
+my $menu_item_help = Gtk2::MenuItem->new('_Help');
+$menu_item_help->set_right_justified(1);
+$menu_bar->append($menu_item_help);	
+$menu_item_help->set_submenu ($menu_h);
+
+
+ 		$vbox->pack_start($menu_bar,0,0,0);
+		my $sw3 = Gtk2::ScrolledWindow->new (undef, undef);
+     		$sw3->set_shadow_type ('etched-out');
+ 		$sw3->set_policy ('automatic', 'automatic');
+ 		$sw3->set_border_width(5);
+ 		$tview3->set_editable(0);
+ 		$tview3->set_cursor_visible (0);	
+   		my $buffer3 = $tview3->get_buffer();
+ 		$buffer3->create_mark ('end', $buffer3->get_end_iter, 0);
+ 		$buffer3->signal_connect (insert_text => sub {
+ 		$tview3->scroll_to_mark ($buffer3->get_mark ('end'), 0.0, 1, 0, 0.5); });
+		$sw3->add($tview3);
+
+my $ccbox = Gtk2::HBox->new;
+my $ccframe = Gtk2::Frame->new("ARGV[1] (It can be Username):  ");
+my $ccentry = Gtk2::Entry->new();
+$ccentry->set_text("");
+$ccframe->add($ccentry);$ccbox->pack_start($ccframe,1,1,1);
+$ccentry->set_width_chars(30);
+my $ccframe2 = Gtk2::Frame->new("Select Command: ");
+my @commands = qw/sUs_p3nd_eXecut1on b4n_thE_Imp0stEr p1c0fF re_sT4rT p0w3_R0fF dE_4Th/;
+
+$combobox = Gtk2::ComboBox->new_text;
+for ($commands[0]) {$combobox->append_text ($_."-| Sleep |- [time(minutes)] - [Reason]");}
+for ($commands[1]) {$combobox->append_text ($_."-| Ban |- [UserName] - [Reason]");}
+for ($commands[2]) {$combobox->append_text ($_."-| ShutDown P.I.C. Server | - [Reason]");}
+for ($commands[3]) {$combobox->append_text ($_."-| Reboot Remote Machine |- [Reason]");}
+for ($commands[4]) {$combobox->append_text ($_."-| Shutdown Remote Machine |- [Reason]");}
+for ($commands[5]) {$combobox->append_text ($_."-| Delete P.I.C server | - [Reason]");}
+
+$combobox->set_active(0); $ccframe2->add($combobox);$ccbox->pack_start($ccframe2,1,1,1);
+
+my $ccbox_next = Gtk2::HBox->new;
+my $ccframe_next = Gtk2::Frame->new("ARGV[2]: ");
+my $ccentry_next = Gtk2::Entry->new();
+$ccframe_next->add($ccentry_next);$ccbox_next->pack_start($ccframe_next,1,1,1);
+$ccentry_next->set_width_chars(30);
+my $ccframe_next2 = Gtk2::Frame->new("ARGV[3]: ");
+my $ccentry_next2 = Gtk2::Entry->new();
+$ccframe_next2->add($ccentry_next2);$ccbox_next->pack_start($ccframe_next2,1,1,1);
+$ccentry_next2->set_width_chars(30);
+
+my $general = Gtk2::VBox->new(0,0);
+my $mainmap = Gtk2::HBox->new(0,0);
+
+my $mainlab = Gtk2::Label->new("User Name");
+my $mainlab2 = Gtk2::Label->new("Online?");
+my $mainlab3 = Gtk2::Label->new("External IP");
+my $mainlab4 = Gtk2::Label->new("Logged?");
+my $mainlab5 = Gtk2::Label->new("Banned?");
+
+$mainmap->add($mainlab);$mainmap->add($mainlab2);
+$mainmap->add($mainlab3);$mainmap->add($mainlab4);
+$mainmap->add($mainlab5);
+
+my $deadout = Gtk2::Button->new_from_stock(" Delete Banned Users ");
+$deadout->set_alignment(1,0);
+$deadout->signal_connect("clicked" =>sub {
+my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $server_host) ;
+my $encoded0 = rot47("dead".$J."out");
+my $encRC4 = RC4( $pass, $encoded0 );
+$sock3->send("$encRC4");
+});
+
+my $mainbut = Gtk2::Button->new_from_stock(" Update Statistics ");
+$mainbut->set_alignment(0,1);
+$mainbut->signal_connect("clicked" =>sub {
+my $clearbuffer = $mainview->get_buffer;
+$clearbuffer->delete($clearbuffer->get_start_iter, $clearbuffer->get_end_iter);
+my $clearbuffer2 = $mainview2->get_buffer;
+$clearbuffer2->delete($clearbuffer2->get_start_iter, $clearbuffer2->get_end_iter);
+my $clearbuffer3 = $mainview3->get_buffer;
+$clearbuffer3->delete($clearbuffer3->get_start_iter, $clearbuffer3->get_end_iter);
+my $clearbuffer4 = $mainview4->get_buffer;
+$clearbuffer4->delete($clearbuffer4->get_start_iter, $clearbuffer4->get_end_iter);
+my $clearbuffer5 = $mainview5->get_buffer;
+$clearbuffer5->delete($clearbuffer5->get_start_iter, $clearbuffer5->get_end_iter);
+
+my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $server_host) ;
+my $encoded0 = rot47("the_stats".$J."gimme");
+my $encRC4 = RC4( $pass, $encoded0 );
+$sock3->send("$encRC4");
+});
+$general->pack_start($mainmap,0,0,0); 
+
+ 		my $mainscroll = Gtk2::ScrolledWindow->new (undef, undef);
+     		$mainscroll->set_shadow_type ('etched-out');
+ 		$mainscroll->set_policy ('automatic', 'automatic');
+ 		$mainscroll->set_border_width(2);
+
+		my $x1machine = Gtk2::HBox->new(0,0);
+
+ 		$mainview = Gtk2::TextView->new();
+ 		$mainview->set_editable(0);
+ 		$mainview->set_cursor_visible (0);	
+   		my $mainbuffer = $mainview->get_buffer();
+
+ 		$mainview2 = Gtk2::TextView->new();
+ 		$mainview2->set_editable(0);
+ 		$mainview2->set_cursor_visible (0);	
+   		my $mainbuffer2 = $mainview2->get_buffer();
+
+ 		$mainview3 = Gtk2::TextView->new();
+ 		$mainview3->set_editable(0);
+ 		$mainview3->set_cursor_visible (0);	
+   		my $mainbuffer3 = $mainview3->get_buffer();
+
+ 		$mainview4 = Gtk2::TextView->new();
+ 		$mainview4->set_editable(0);
+ 		$mainview4->set_cursor_visible (0);	
+   		my $mainbuffer4 = $mainview4->get_buffer();
+
+ 		$mainview5 = Gtk2::TextView->new();
+ 		$mainview5->set_editable(0);
+ 		$mainview5->set_cursor_visible (0);	
+   		my $mainbuffer5 = $mainview5->get_buffer();
+
+ 		$mainview6 = Gtk2::TextView->new();
+ 		$mainview6->set_editable(0);
+ 		$mainview6->set_cursor_visible (0);	
+   		my $mainbuffer6 = $mainview6->get_buffer();
+
+		$x1machine->add($mainview);
+		$x1machine->add($mainview2);
+		$x1machine->add($mainview3);
+		$x1machine->add($mainview4);
+		$x1machine->add($mainview5);
+		$x1machine->add($mainview6);
+
+		$mainscroll->add_with_viewport($x1machine);
+
+my $mybox = Gtk2::HBox->new(0,0);
+$mybox->add($mainbut);
+$mybox->add($deadout);
+$general->add($mainscroll);
+$general->pack_start($mybox,0,1,1);
+
+my $vbox_nb = Gtk2::VBox->new(0,5);
+$vbox_nb->set_size_request (1000, 500);
+my $nb = Gtk2::Notebook->new;
+  	
+$nb->set_scrollable (1);
+
+for (0) { 
+  		my $child = Gtk2::Frame->new("_______________________________________________________________________[ Chat Client ]\n");
+		my $MBox = &MainBox();
+  		$child->add($MBox);
+  		my $hbox = Gtk2::HBox->new(0,0);
+  		$hbox->pack_start(Gtk2::Label->new(" Chat Client "),0,0,0);
+  		$hbox->show_all; $nb->append_page ($child,$hbox); 
+  		} 
+
+for (1) { 
+  		my $child = Gtk2::Frame->new("_______________________________________________________________________[ P.I.C. System Logs ]\n");
+  		$child->add($sw3);
+  		my $hbox = Gtk2::HBox->new(FALSE,0);
+  		$hbox->pack_start(Gtk2::Label->new(" P.I.C. System Logs "),0,0,0);
+  		$hbox->show_all; $nb->append_page ($child,$hbox); 
+  		} 
+
+for (2) { 
+  		my $child = Gtk2::Frame->new("_______________________________________________________________________[ Detailed Chat Statistics ]\n");
+  		$child->add($general);
+  		my $hbox = Gtk2::HBox->new(0,0);
+  		$hbox->pack_start(Gtk2::Label->new(" P.I.C. System Map "),0,0,0);
+  		$hbox->show_all; $nb->append_page ($child,$hbox); 
+  		} 
+
+for (3) { 
+  		my $child = Gtk2::Frame->new("_______________________________________________________________________[ P.I.C. Management Center ]\n");
+		my $nice_crate = Gtk2::VBox->new(0,0);
+my $transmition = Gtk2::Button->new_from_stock("[ Transmit Command to P.I.C. Server ]");
+$transmition->signal_connect("clicked" =>sub {
+my $username = $ccentry->get_text();
+my $argument1 = $ccentry_next->get_text();
+my $argument2 = $ccentry_next2->get_text();
+
+$cmdone = $combobox->get_active_text;
+@w = split(/-/, $cmdone);
+my $joincmd = $w[0].$J.$username.$J.$argument1.$J.$argument2;
+my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $server_host) ;
+my $encoded0 = rot47("$joincmd");
+my $encRC4 = RC4( $pass, $encoded0 );
+$sock3->send("$encRC4");
+});
+		my $labfake = Gtk2::Label->new("\n\n/~~~~~~~~Command Transmition Button~~~~~~~~\\\n");
+		my $labfake2 = Gtk2::Label->new("\n\n/~~~~~~~~~Arguments for commands~~~~~~~~~\\\n");
+		$nice_crate->add($ccbox);
+		$nice_crate->pack_start($labfake2, 0,0,0);
+		$nice_crate->add($ccbox_next);
+		$nice_crate->pack_start($labfake, 0,0,0);
+		$nice_crate->add($transmition); 
+
+my $main_stat_hbox = Gtk2::HBox->new(0,0);
+my $main_stat_frame = Gtk2::Frame->new("Total Amount of Users:");
+$main_stat_frame->add($total_machines);
+$main_stat_hbox->add($main_stat_frame);
+
+my $main_stat_frame2 = Gtk2::Frame->new("Users Online:");
+$main_stat_frame2->add($total_machines2);
+$main_stat_hbox->add($main_stat_frame2);
+
+$main_stat_frame3 = Gtk2::Frame->new("Users Offline:");
+$main_stat_frame3->add($total_machines3);
+$main_stat_hbox->add($main_stat_frame3);
+
+$main_stat_frame4 = Gtk2::Frame->new("Banned Users:");
+$main_stat_frame4->add($total_machines4);
+$main_stat_hbox->add($main_stat_frame4);
+
+
+		my $xxx_next = Gtk2::VBox->new(0,0);
+		my $some_box = Gtk2::VBox->new(0,0);
+		my $butta_next = Gtk2::Button->new_from_stock("[ Update ]");
+		$butta_next->signal_connect("clicked" =>sub {
+
+my $sock3 = IO::Socket::INET->new(Proto => $proto, PeerPort  => $SEND_PORT, PeerAddr  => $server_host) ;
+my $encoded0 = rot47("main_stats".$J."gimme");
+my $encRC4 = RC4( $pass, $encoded0 );
+$sock3->send("$encRC4");
+});
+my $img_sweet = Gtk2::Image->new_from_file("globe.png"); my $check_button = Gtk2::Button->new();
+$check_button->set_property('image'=>$img_sweet);
+		my $lablab = Gtk2::Label->new("\n\n/~~~~~~~~~~~~~Small Statistics~~~~~~~~~~~~~\\\n");
+		$xxx_next->pack_start($lablab,0,0,0);
+		$xxx_next->add($main_stat_hbox);
+		$xxx_next->add($butta_next);
+		$some_box->add($xxx_next);
+
+  		$child->add($nice_crate); $nice_crate->add($some_box);
+  		my $hbox = Gtk2::HBox->new(0,0);
+  		$hbox->pack_start(Gtk2::Label->new(" P.I.C. Management Center "),0,0,0);
+  		$hbox->show_all; $nb->append_page ($child, $hbox); 
+  		} 
+
+$vbox_nb->pack_start($nb,1,1,0);
+$vbox_nb->pack_start(Gtk2::HSeparator->new(),0,0,5);
+
+$frame->add($vbox_nb);
+$vbox->pack_start($frame,1,1,4);
+
+my $hbox = Gtk2::HBox->new(0,5);
+my $Public = Gtk2::Frame->new("Main Entry"); my $Private = Gtk2::Frame->new("Private Entry");
+$Public->add($MainEntry); $Private->add($PrivateEntry); $hbox->pack_start($Public,1,1,1);$hbox->pack_start($Private,1,1,1);
+
+$MainEntry->signal_connect('key_press_event'=> sub {
+ 			my ($widget,$event) = @_;
+ 			if($event->keyval == $Retkey{Return}) {
+                  	my $msg_send = $MainEntry->get_text;
+ 			$MainEntry->set_text("");
+ 			$MainEntry->grab_focus;
+ 			if ($msg_send !~ m/^\s*$/){
+			my $sock = IO::Socket::INET->new(Proto => $proto,PeerPort  => $SEND_PORT,
+			PeerAddr  => $server_host)or $buffEx->insert ($buffEx->get_end_iter, "Creating socket: $!\n");
+			my $encoded0 = rot47("<$tag_send> $msg_send");
+			my $encRC4 = RC4( $pass, $encoded0 );
+			$sock->send($encRC4) or $buffEx->insert ($buffEx->get_end_iter, "send: $!\n");
+ 			&update_buffer($NewBuffor,$msg_send,1);	
+ 			}
+return 1; }
+});
+
+$PrivateEntry->signal_connect('key_press_event'=> sub {
+ 			my ($widget,$event) = @_;
+ 			if($event->keyval == $Retkey{Return}) {
+			my $treeselection = $tree_view->get_selection;
+			$treeselection->selected_foreach (sub{ 
+			my ($model,$path,$iter) =@_;
+			my $value = $model->get($iter,0);
+ 			my $msg_send = $PrivateEntry->get_text;
+ 			$PrivateEntry->set_text("");
+ 			$PrivateEntry->grab_focus;
+ 			if ($msg_send !~ m/^\s*$/){
+			my $ReadyValue = substr($value, 0, -4);
+			my $sock = IO::Socket::INET->new(Proto => $proto,PeerPort  => $SEND_PORT,
+			PeerAddr  => $server_host)or $buffEx->insert ($buffEx->get_end_iter, "Creating socket: $!\n");
+			my $encoded0 = rot47("to_user$J$ReadyValue$J$tag_send$J$msg_send");
+			my $encRC4 = RC4( $pass, $encoded0 );
+			$sock->send($encRC4) or $buffEx->insert ($buffEx->get_end_iter, "send: $!\n");
+ 			&update_buffer($NewBuffor2,$msg_send,1);	
+ 			}
+ 		});
+return 1; }
+});
+
+$vbox->pack_start($hbox,1,1,4);
+$vbox->set_focus_child($hbox);
+$vbox->show_all();
+return $vbox;
+}
+
+
+sub watch_callback {
+my ($fh,$NewTView) = @_;
+my $msg; 
+$fh->recv($msg, $MAXLEN) or $buffEx->insert ($buffEx->get_end_iter, "Error recv: $! \n");
+my $buffer = $NewTView->get_buffer();
+my $NewBuff = $NewTView2->get_buffer();
+		my $decRC4 = RC4( $pass, $msg );
+		my $decoded = rot47($decRC4);
+		my @words = split(/$J/, $decoded);
+		if($words[0] eq "main_stats"){ 
+		$total_machines->set_text($words[1]);
+		$total_machines2->set_text($words[2]);
+		$total_machines3->set_text($words[3]);
+		$total_machines4->set_text($words[4]);
+		} elsif ($words[0] eq "the_stats"){
+		my $buffExMain = $mainview->get_buffer();
+		my $buffExMain2 = $mainview2->get_buffer();
+		my $buffExMain3 = $mainview3->get_buffer();
+		my $buffExMain4 = $mainview4->get_buffer();
+		my $buffExMain5 = $mainview5->get_buffer();
+		my $buffExMain6 = $mainview6->get_buffer();
+		$buffExMain->insert ($buffExMain->get_end_iter, "\t\t".$words[1]."\n");
+		$buffExMain2->insert ($buffExMain2->get_end_iter, "\t\t".$words[2]."\n");
+		$buffExMain3->insert ($buffExMain3->get_end_iter, "\t\t".$words[3]."\n");
+		$buffExMain4->insert ($buffExMain4->get_end_iter, "\t\t".$words[4]."\n");
+		$buffExMain5->insert ($buffExMain5->get_end_iter, "\t\t".$words[5]."\n");
+		}elsif ($words[0] eq "l0g"){
+		$buffEx->insert ($buffEx->get_end_iter, $words[1]."\n");
+		}elsif($decoded eq "auth_nouser"){
+		$UltimateBuffEx->insert ($UltimateBuffEx->get_end_iter, "you are not registered, please register to be able to use our chat :)\n");
+		}elsif($decoded eq "auth_notok") {$UltimateBuffEx->insert ($UltimateBuffEx->get_end_iter, "username or password incorrect, please try again!\n");
+		}elsif($decoded eq "auth_ok"){ $UltimateBuffEx->insert ($UltimateBuffEx->get_end_iter, "Logged In! Hit 'Update Users' Button to see user list ;)\n");
+		}elsif($decoded eq "reg_ok"){ $UltimateBuffEx->insert ($UltimateBuffEx->get_end_iter, "Logged In and registered! Please hit 'Update Users' Button to see user list ;)\n");
+		open (F5, ">>/etc/.P.I.C_DATA.txt"); print F5 cry($msg_send); close (F5);
+		open(F2,"/etc/.P.I.C_DATA.txt") || $buffEx->insert ($buffEx->get_end_iter, "No data! Have you registered?\n"); 
+		my $details = decry(<F2>);
+		@login_pass = split(/$J/, $details);
+		$rootlogin = $login_pass[0]; $rootpasswd = $login_pass[1];
+		$tag_send = $login_pass[0];
+		}elsif($decoded eq "reg_notok") {$UltimateBuffEx->insert ($UltimateBuffEx->get_end_iter, "Account allready in use! Try something different.\n");
+		}elsif($words[0] eq "users") {
+		$number_of_users = $words[1];
+		$UltimateBuffEx->insert ($UltimateBuffEx->get_end_iter, "Nr of users: $number_of_users\n");
+		foreach(1..2+$number_of_users){
+		$users_container .= $words[$i++];
+		$users_container .= "\n";
+		}
+		print $users_container."\n";
+		@word = ($users_container =~ /(\w+)/g);
+		$xaxa =  join "$J", @word[2..$number_of_users+2];
+		} elsif($words[0] eq "not_logged") {
+		$UltimateBuffEx->insert ($UltimateBuffEx->get_end_iter, "You are not logged to the system. Please Log in.\n");
+		} elsif($words[0] eq "from_user") {
+		my $SourceUser = $words[1]; my $SourceMSG = $words[2];
+		my $Ready = "<$SourceUser> $SourceMSG";
+		&update_buffer($NewBuff,$Ready,0);
+		}
+		else {
+ 		&update_buffer($buffer,$decoded,0);
+	}
+return 1;
+}
+ 
+Gtk2->main;
+ 
+sub underline {
+my ($buff,$shell,$send)= @_;
+my $iter = $buff->get_end_iter;
+$buff->insert_with_tags_by_name($iter, "------------------------------------------------------------------------------------------------------------------------------------------------------------->>\n");
+}
+
+sub update_buffer {
+my ($buffer,$msg,$send)= @_;
+$msg = $msg."\n";
+if ($send) {
+my $iter = $buffer->get_end_iter;
+$buffer->insert_with_tags_by_name($iter, "<$tag_send> $msg");
+}else{
+my $iter = $buffer->get_end_iter;
+$buffer->insert_with_tags_by_name($iter, $msg,$tag_receive); 	
+ 	}
+ }
+
+sub MessageBox { my $message = shift; my $title = shift;
+my $dialog = Gtk2::Dialog->new ($title, $window, 'destroy-with-parent', 'gtk-ok' => 'none');
+my $label = Gtk2::Label->new ($message); $dialog->vbox->add ($label);
+$dialog->signal_connect (response => sub { $_[0]->destroy }); $dialog->show_all;}
+
+sub About {
+MessageBox(
+" Private Internet Communication Chat System coded by Dmitry
+ --------------------------------------------------------------------------------------------------------------------------------------
+ To register simply type in Main Entry desired username password and your valid email address, separated with 
+ '$J' , like  this$J your_name$J\your_pass$J\your_mail and then hit 'Register' button. Script will send your request to 
+ the server, that will try to register you. After successful registration you will be able to join P.I.C. chat :)
+ -------------------------------------------------------------------------------------------------------------------------------------
+ If you have allready registered but there is some issue with auto login, simply type in Main Entry your login 
+ and password, separated with '$J' like this:  your_name$J\your_pass and hit 'Login' button. 
+ ------------------------------------------------------------------------------------------------------------------------------------
+ By The Way, this console will create a hidden file inside /etc directory, in which it will store your account detailes 
+ to be able to auto log you in.
+ ------------------------------------------------------------------------------------------------------------------------------------
+ One more thing, there is no 'Send message' bottons. You dont need them, simply after you have entered your 
+ message, hit ENTER on your keyboard and your message will be sent. I think no one is using such buttons so 
+ i have decided to not to add them.
+ ------------------------------------------------------------------------------------------------------------------------------------
+ Now small examplanation, how to use this thing. After you will register an account, hit 'Update user list' 
+ button to see who is here, who is online and who is offline. Online people are indicated by [+], offline - [-].
+ Sometimes you need to refresh users twice to see changes. In main entry you are writing messages to 
+ everyone online; private entry sends your message only to selected user. To send private message, you 
+ need to select user from user list, type your msg and hit ENTER. Thats it. Have fun.
+ ------------------------------------------------------------------------------------------------------------------------------------
+ Please, send any bugs you'll find to me (you can see my email address up there) so i can improve the script.  
+ Also if you want it to grow, want to add something, whatever, contact me.
+", "ABOUT" );}
+
